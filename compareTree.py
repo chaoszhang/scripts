@@ -108,9 +108,9 @@ def missingBranch(query, ref):
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     with open(sys.argv[1]) as file1:
-        root = string2tree(file1.readline())
+        root = string2tree(file1.readline().split(";")[0])
         tree = buildTree(root)
     with open(sys.argv[2]) as file2:
-        root2 = string2tree(file2.readline())
+        root2 = string2tree(file2.readline().split(";")[0])
         tree2 = mapTree(root2, tree)
     print(missingBranch(tree, tree2))
