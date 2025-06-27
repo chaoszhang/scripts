@@ -14,6 +14,6 @@ for line in open(sys.argv[1]):
         if len(alignment) >= 4:
             printAlignment(alignment)
         alignment = []
-    elif int(line[3]) > 100 and (len(line[1]) < 3 || line[1][0:3] != "Anc") :
+    elif int(line[3]) > 100 and (len(line[1]) < 3 or line[1][0:3] != "Anc") :
         alignment.append((line[1], line[6]))
 printAlignment(alignment)
