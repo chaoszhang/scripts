@@ -1,117 +1,104 @@
-import sys, re, secrets, argparse, warnings
-import numpy as np
+import sys
+import re
+import random
 
-LEN = 4
+sys.setrecursionlimit(100000)
 
-def randomElement():
-    return np.asarray([int(secrets.token_hex(8), 16) for i in range(LEN)], dtype=np.uint64)
-
-def identityElement():
-    return np.zeros(LEN, dtype=np.uint64)
-
-def elementEqual(a, b):
-    return np.array_equal(a, b)
-
-def string2label(s):
-    a = s.split(":")
-    if len(a) == 1:
-        return {"label": a[0], "length": ""}
-    else:
-        return {"label": a[0], "length": a[1]}
-
-def token2subtree(a, i):
-    children = []
-    while i < len(a) and a[i] == "":
-        i += 1
-    if a[i] == "(":
-        while a[i] != ")":
-            c, i = token2subtree(a, i + 1)
-            children.append(c)
-            while i < len(a) and a[i] == "":
+def parseNewickHelper(nw, i, p):
+    cur = {"P": p, "isroot": p is None, "children": []}
+    if nw[i] == "(":
+        child, i = parseNewickHelper(nw, i + 1, cur)
+        cur["children"].append(child)
+        while nw[i] != ")":
+            while nw[i] != "," and nw[i] != ")":
                 i += 1
+            if nw[i] == ",":
+                child, i = parseNewickHelper(nw, i + 1, cur)
+                cur["children"].append(child)
+        cur["isleaf"] = False
+    else:
+        cur["label"] = nw[i]
+        cur["isleaf"] = True
+    i += 1
+    while nw[i] not in ",);":
         i += 1
-    d = string2label(a[i] if i < len(a) else "")
-    return ({"children": children, "label": d["label"], "length": d["length"]}, i + 1)
+    return cur, i
 
-def string2tree(s):
-    a = re.split("([(,)])", s)
-    return token2subtree(a, 0)[0]
+def parseNewick(nw):
+    return parseNewickHelper([e for e in re.split("([(,:);])", nw) if e != ""], 0, None)[0]
 
-def buildRecursion(node, tree):
-    if len(node["children"]) == 0:
-        if node["label"] in tree["label2leaf"]:
-            print("Duplicated leaves?")
-            exit(1)
-        tree["label2leaf"][node["label"]] = node
-        e = randomElement()
+def printNewick(t):
+    if t["isleaf"]:
+        return t["label"]
     else:
-        e = identityElement()
-        for child in node["children"]:
-            buildRecursion(child, tree)
-            e += child["element"]
-    node["element"] = e
-    h = e[0]
-    if h in tree["hash2node"]:
-        print("Unlucky, try again!")
-        exit(1)
-    tree["hash2node"][h] = node
-    
-def buildTree(root):
-    tree = {"root": root, "label2leaf": {}, "hash2node": {}}
-    buildRecursion(root, tree)
-    return tree
+        return "(" + ",".join([printNewick(child) for child in t["children"]]) + ")"
 
-def mapRecursion(node, tree, ref):
-    if len(node["children"]) == 0:
-        if node["label"] in tree["label2leaf"]:
-            print("Duplicated leaves?")
-            exit(1)
-        tree["label2leaf"][node["label"]] = node
-        e = ref["label2leaf"][node["label"]]["element"]
+MAXRAND = 2 ** 512
+def randomLeafHash():
+    return (random.randrange(MAXRAND) ^ random.randrange(MAXRAND)) + random.randrange(MAXRAND)
+
+def assignLeafHash(cur, RLeafHash):
+    if cur["isleaf"]:
+        RLeafHash[cur["label"]] = randomLeafHash()
     else:
-        e = identityElement()
-        for child in node["children"]:
-            mapRecursion(child, tree, ref)
-            e += child["element"]
-    node["element"] = e
-    h = e[0]
-    if h in tree["hash2node"]:
-        print("Unlucky, try again!")
-        exit(1)
-    tree["hash2node"][h] = node
+        for child in cur["children"]:
+            assignLeafHash(child, RLeafHash)
 
-def mapTree(root, ref):
-    tree = {"root": root, "label2leaf": {}, "hash2node": {}}
-    mapRecursion(root, tree, ref)
-    return tree
+def mapLeafHash(cur, RLeafHash, QLeafHash):
+    if cur["isleaf"]:
+        label = cur["label"]
+        if label in RLeafHash:
+            QLeafHash[label] = RLeafHash[label]
+    else:
+        for child in cur["children"]:
+            mapLeafHash(child, RLeafHash, QLeafHash)
 
-def missingBranch(query, ref):
-    cnt = 0
-    s = ref["root"]["element"]
-    keynodeH = query["root"]["children"][0]["element"][0] if len(query["root"]["children"]) == 2 else 0
-    for h in query["hash2node"]:
-        if h == keynodeH:
-            continue
-        if h in ref["hash2node"]:
-            if not elementEqual(query["hash2node"][h]["element"], ref["hash2node"][h]["element"]):
-                print("Unlucky, try again!")
-                exit(1)
-        elif s[0] - h in ref["hash2node"]:
-            if not elementEqual(s - query["hash2node"][h]["element"], ref["hash2node"][s[0] - h]["element"]):
-                print("Unlucky, try again!")
-                exit(1)
+def tree2set(cur, TSet, QLeafHash, QRootHash, QTrivialHash):
+    if cur["isleaf"]:
+        label = cur["label"]
+        if label in QLeafHash:
+            return QLeafHash[label]
         else:
-            cnt += 1
-    return cnt
+            return 0
+    else:
+        nodeHash = sum([tree2set(child, TSet, QLeafHash, QRootHash, QTrivialHash) for child in cur["children"]])
+        minHash = min(nodeHash, QRootHash - nodeHash)
+        if minHash not in QTrivialHash:
+            TSet.add(minHash)
+        return nodeHash
 
+if len(sys.argv) != 3:
+    print("python3 compareTree.py ref.nw queries.nw", file=sys.stderr)
+    print("ref.nw: one Newick tree in one line", file=sys.stderr)
+    print("queries.nw: N Newick trees in N lines", file=sys.stderr)
+    print("stdout: FN, FP, TP, and NRF in queries.nw order", file=sys.stderr)
+    quit()
+    
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    with open(sys.argv[1]) as file1:
-        root = string2tree(file1.readline().split(";")[0])
-        tree = buildTree(root)
-    for i in range(2, len(sys.argv)):
-        with open(sys.argv[i]) as file2:
-            root2 = string2tree(file2.readline().split(";")[0])
-            tree2 = mapTree(root2, tree)
-        print(missingBranch(tree, tree2))
+R = parseNewick(open(sys.argv[1]).readline())
+RLeafHash = {}
+assignLeafHash(R, RLeafHash)
+
+print("FN: only in reference tree", file=sys.stderr)
+print("FP: only in query tree", file=sys.stderr)
+print("TP: in both trees", file=sys.stderr)
+print("NRF: normalized RF distance", file=sys.stderr)
+
+print("FN", "FP", "TP", "NRF")
+for line in open(sys.argv[2]):
+    Q = parseNewick(line)
+    QLeafHash = {}
+    mapLeafHash(Q, RLeafHash, QLeafHash)
+    QRootHash = sum([QLeafHash[e] for e in QLeafHash])
+    QTrivialHash = frozenset([0] + [min(QLeafHash[e], QRootHash - QLeafHash[e]) for e in QLeafHash])
+    RSet = set()
+    tree2set(R, RSet, QLeafHash, QRootHash, QTrivialHash)
+    RSet = frozenset(RSet)
+    QSet = set()
+    tree2set(Q, QSet, QLeafHash, QRootHash, QTrivialHash)
+    QSet = frozenset(QSet)
+    TP = len(RSet & QSet)
+    FN = len(RSet) - TP
+    FP = len(QSet) - TP
+    NRF = (FN + FP) / (FN + FP + 2 * TP) if FN + FP + 2 * TP > 0 else "NA"
+    print(FN, FP, TP, NRF)
