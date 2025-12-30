@@ -5,8 +5,8 @@
 
 using namespace std;
 
-int STRIDE[3] = {10, 50, 250};
-double FP = 0.01;
+const int N_STRIDE = 5, STRIDE[N_STRIDE] = {10, 50, 200, 1000, 5000};
+const double FP = 0.05;
 
 int main(int argc, char** argv){
 	vector<string> names, seqs;
@@ -19,7 +19,7 @@ int main(int argc, char** argv){
 		}
 		else seqs.back() += line;
 	}
-	int n = seqs.size(), len = (seqs[0].size() / STRIDE[2]) * STRIDE[2];
+	int n = seqs.size(), len = (seqs[0].size() / STRIDE[N_STRIDE - 1]) * STRIDE[N_STRIDE - 1];
 	vector<int> cntA(len), cntC(len), cntG(len), cntT(len), cntN(len);
 	
 	for (int i = 0; i < n; i++){
@@ -34,40 +34,72 @@ int main(int argc, char** argv){
 		}
 	}
 	
-	for (int s = 2; s >= 0; s--){
-		vector<int> strideCnt(len / STRIDE[s]), intervalCnt(STRIDE[s] * 2 * 5 + 1);
-		for (int j = 0; j < len; j++){
-			if (cntA[j]) strideCnt[j / STRIDE[s]]++;
-			if (cntC[j]) strideCnt[j / STRIDE[s]]++;
-			if (cntG[j]) strideCnt[j / STRIDE[s]]++;
-			if (cntT[j]) strideCnt[j / STRIDE[s]]++;
-			if (cntN[j]) strideCnt[j / STRIDE[s]]++;
+	vector<bool> strideMask(len / STRIDE[N_STRIDE - 1]);
+	vector<int> stride0Uniq(len / STRIDE[0]);
+	for (int j = 0; j < len; j++){
+		if (cntA[j]) stride0Uniq[j / STRIDE[0]]++;
+		if (cntC[j]) stride0Uniq[j / STRIDE[0]]++;
+		if (cntG[j]) stride0Uniq[j / STRIDE[0]]++;
+		if (cntT[j]) stride0Uniq[j / STRIDE[0]]++;
+	}
+	
+	for (int s = N_STRIDE - 1; s >= 0; s--){
+		vector<int> uniqCnt(STRIDE[s] * 2 * 4 + 1);
+		int uniqCntTotal = 0;
+		vector<int> strideUniq(len / STRIDE[s]);
+		for (int j = 0; j < len / STRIDE[0]; j++){
+			strideUniq[j * STRIDE[0] / STRIDE[s]] += stride0Uniq[j];
 		}
 		
 		for (int j = 0; j < len / STRIDE[s] - 1; j++){
-			intervalCnt[strideCnt[j] + strideCnt[j + 1]]++;
+			if (!strideMask[j] && !strideMask[j + 1]) {
+				uniqCnt[strideUniq[j] + strideUniq[j + 1]]++;
+				uniqCntTotal++;
+			}
 		}
 		
-		int cnt = (len / STRIDE[s] - 1) * FP / 2.0 / 3.0, threshold;
-		for (threshold = STRIDE[s] * 2 * 5; threshold > 0; threshold--){
-			if (cnt < intervalCnt[threshold]) break;
-			cnt -= intervalCnt[threshold];
+		vector<int> binCnt(5 * 2 * 4 + 1);
+		for (int i = 0; i < STRIDE[s] * 2 * 4 + 1; i++){
+			binCnt[i * 5 / STRIDE[s]] += uniqCnt[i];
 		}
+		for (int i = 0; i < 5 * 2 * 4 + 1; i++){
+			cerr << i << " " << binCnt[i] << "\n";
+		}
+		cerr << endl;
+		
+		int cnt = uniqCntTotal * FP / 2.0 / N_STRIDE, threshold;
+		cerr << "Cnt: " << cnt << endl;
+		for (threshold = STRIDE[s] * 2 * 4; threshold > 0; threshold--){
+			if (cnt < uniqCnt[threshold]) break;
+			cnt -= uniqCnt[threshold];
+		}
+		cerr << "Threshold: " << threshold << endl << endl;
 		
 		for (int j = 0; j < len / STRIDE[s] - 1; j++){
-			if (strideCnt[j] + strideCnt[j + 1] <= threshold) continue;
+			if (strideUniq[j] + strideUniq[j + 1] <= threshold) continue;
+			strideMask[j] = true;
+			strideMask[j + 1] = true;
+		}
+		
+		if (s > 0){
+			vector<bool> newStrideMask(len / STRIDE[s - 1]);
+			for (int j = 0; j < len / STRIDE[s - 1] - 1; j++){
+				newStrideMask[j] = strideMask[j * STRIDE[s - 1] / STRIDE[s]];
+			}
+			strideMask = move(newStrideMask);
+		}
+		else {
 			for (int i = 0; i < n; i++){
-				for (int k = j * STRIDE[s]; k < (j + 2) * STRIDE[s]; k++){
-					seqs[i][k] = 'N';
+				for (int j = 0; j < len; j++){
+					if (strideMask[j / STRIDE[0]]) seqs[i][j] = 'N';
 				}
 			}
-			for (int k = j * STRIDE[s]; k < (j + 2) * STRIDE[s]; k++){
-				cntA[k] = 0;
-				cntC[k] = 0;
-				cntG[k] = 0;
-				cntT[k] = 0;
-				cntN[k] = n;
+			
+			int maskCnt = 0;
+			for (int i = 0; i < strideMask.size(); i++){
+				if (strideMask[i]) maskCnt++;
 			}
+			cerr << "Filter rate: " << maskCnt * 100.0 / strideMask.size() << "%\n";
 		}
 	}
 	
