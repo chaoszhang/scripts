@@ -58,6 +58,7 @@ int main(int argc, char** argv){
 			}
 		}
 		
+		/*
 		vector<int> binCnt(5 * 2 * 4 + 1);
 		for (int i = 0; i < STRIDE[s] * 2 * 4 + 1; i++){
 			binCnt[i * 5 / STRIDE[s]] += uniqCnt[i];
@@ -66,14 +67,15 @@ int main(int argc, char** argv){
 			cerr << i << " " << binCnt[i] << "\n";
 		}
 		cerr << endl;
+		*/
 		
 		int cnt = uniqCntTotal * FP / 2.0 / N_STRIDE, threshold;
-		cerr << "Cnt: " << cnt << endl;
+		// cerr << "Cnt: " << cnt << endl;
 		for (threshold = STRIDE[s] * 2 * 4; threshold > 0; threshold--){
 			if (cnt < uniqCnt[threshold]) break;
 			cnt -= uniqCnt[threshold];
 		}
-		cerr << "Threshold: " << threshold << endl << endl;
+		// cerr << "Threshold: " << threshold << endl << endl;
 		
 		for (int j = 0; j < len / STRIDE[s] - 1; j++){
 			if (strideUniq[j] + strideUniq[j + 1] <= threshold) continue;
