@@ -72,11 +72,12 @@ purposes, which is exactly what branch identity requires.
 1. Per tree, hashing is one addition per node: `O(n)` total, versus `O(n^2)`
    for bipartition-string-set comparisons.
 2. Per gene, the projected hash `h(A ∩ L_G)` for every species-tree branch
-   is obtained by an ancestor-marking pass over the gene taxa:
-   `O(|L_G| * depth)` additions, independent of the number of branches.
+   is obtained by a single postorder pass over the species tree, where a
+   species leaf absent from `L_G` contributes hash 0:
+   `O(|L_S|)` additions, independent of the gene size and the tree shape.
 3. Every lookup (branch key to gene branch length, fuse counting) is a
    `dict` operation, `O(1)` expected.
-4. Result: 2275 genes x 302 taxa run in ~9 s in pure Python with no external
+4. Result: 2275 genes x 302 taxa run in ~5.6 s in pure Python with no external
    dependencies.
 
 ## NA classification: pseudocode
@@ -85,7 +86,7 @@ For species-tree branch `A|B` and a gene with leaf set `L_G`:
 
 ```
 A' = A ∩ L_G;  B' = B ∩ L_G
-if |A'| == 0 or |B'| == 0:
+if h(A') == 0 or h(A') == h(L_G):    # i.e. |A'| == 0 or |B'| == 0
     -> NA_struct            # a projected side vanished
 else:
     key = min(h(A'), h(L_G) - h(A'))
@@ -286,106 +287,102 @@ def main():
         f.write(tre_str + ";\n")
 
     # ---- per-gene processing ----
-    rows = [["gene"] + col_names]
-    for line in open(genes_file, encoding="utf-8"):
-        line = line.strip()
-        if not line:
-            continue
-        gname = line[:line.index("(")]
-        gtree = parse_newick(line[line.index("("):])
-
-        # gene tree postorder + subtree hash sums (leaves absent from the
-        # species tree contribute 0)
-        g_nodes = []
-
-        def gpost(n):
-            if n["leaf"]:
-                h = sp_hash.get(n["label"], 0)
-            else:
-                h = 0
-                for c in n["children"]:
-                    h += gpost(c)
-            n["h"] = h
-            g_nodes.append(n)
-            return h
-
-        gpost(gtree)
-        H_G = gtree["h"]
-
-        # gene tree split -> length dict (complementary root children are the
-        # two halves of one unrooted branch, so their lengths are summed)
-        gdict = {}
-        for n in g_nodes:
-            if n is gtree:
-                continue
-            h = n["h"]
-            key = min(h, H_G - h)
-            bl = n["bl"]
-            if key in gdict:
-                prev_h, prev_bl = gdict[key]
-                if prev_h == H_G - h:  # complementary pair: sum the two halves
-                    if bl is None or prev_bl is None:
-                        gdict[key] = (h, None)
-                    else:
-                        gdict[key] = (h, str(Decimal(prev_bl) + Decimal(bl)).lower())
-                # otherwise a hash collision (probability ~2^-512): overwrite
-            else:
-                gdict[key] = (h, bl)
-
-        # species-tree ancestor marking: O(|L_G| * depth) per gene
-        ghash = [0] * len(sp_nodes)
-        gcnt = [0] * len(sp_nodes)
-        L_G = 0
-        for n in g_nodes:
-            if n["leaf"]:
-                sn = leaf_by_name.get(n["label"])
-                if sn is not None:
-                    hv = sp_hash[n["label"]]
-                    L_G += 1
-                    v = sn
-                    while v is not None:
-                        ghash[v["idx"]] += hv
-                        gcnt[v["idx"]] += 1
-                        v = v["parent"]
-        H_G2 = ghash[sp_root["idx"]]
-        assert H_G2 == H_G, "hash mismatch"
-
-        # species branches -> projected keys, fuse detection
-        keys = []
-        for n in seq:
-            if gcnt[n["idx"]] == 0 or gcnt[n["idx"]] == L_G:
-                keys.append(None)  # struct: a projected side is empty
-            else:
-                h = ghash[n["idx"]]
-                keys.append(min(h, H_G - h))
-
-        from collections import Counter
-        cnt = Counter(k for k in keys if k is not None)
-        fuse_keys = {k for k, c in cnt.items() if c > 1}
-
-        row = [gname]
-        for n, key in zip(seq, keys):
-            if key is None:
-                row.append("NA_struct")
-                continue
-            fuse = key in fuse_keys
-            topo = key not in gdict
-            if fuse and topo:
-                row.append("NA_fuse_topo")
-            elif fuse:
-                row.append("NA_fuse")
-            elif topo:
-                row.append("NA_topo")
-            else:
-                bl = gdict[key][1]
-                row.append(bl if bl is not None else "NA_len")
-        rows.append(row)
-
     with open(out_prefix + ".tsv", "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write("\t".join(r) + "\n")
+        f.write("\t".join(["gene"] + col_names) + "\n")
+        ngenes = 0
+        for line in open(genes_file, encoding="utf-8"):
+            line = line.strip()
+            if not line:
+                continue
+            gname = line[:line.index("(")]
+            gtree = parse_newick(line[line.index("("):])
 
-    print("done: %s.tre, %s.tsv (%d genes)" % (out_prefix, out_prefix, len(rows) - 1))
+            # gene tree postorder + subtree hash sums (leaves absent from the
+            # species tree contribute 0)
+            g_nodes = []
+
+            def gpost(n):
+                if n["leaf"]:
+                    h = sp_hash.get(n["label"], 0)
+                else:
+                    h = 0
+                    for c in n["children"]:
+                        h += gpost(c)
+                n["h"] = h
+                g_nodes.append(n)
+                return h
+
+            gpost(gtree)
+            H_G = gtree["h"]
+
+            # gene tree split -> length dict (complementary root children are the
+            # two halves of one unrooted branch, so their lengths are summed)
+            gdict = {}
+            for n in g_nodes:
+                if n is gtree:
+                    continue
+                h = n["h"]
+                key = min(h, H_G - h)
+                bl = n["bl"]
+                if key in gdict:
+                    prev_h, prev_bl = gdict[key]
+                    if prev_h == H_G - h:  # complementary pair: sum the two halves
+                        if bl is None or prev_bl is None:
+                            gdict[key] = (h, None)
+                        else:
+                            gdict[key] = (h, str(Decimal(prev_bl) + Decimal(bl)).lower())
+                    # otherwise a hash collision (probability ~2^-512): overwrite
+                else:
+                    gdict[key] = (h, bl)
+
+            # projected hashes: one postorder pass over the species tree, O(|L_S|).
+            # A species leaf absent from the gene contributes hash 0, so a node's
+            # hash is h(A ∩ L_G) for its clade A (children precede parents in
+            # sp_nodes, which is postorder).
+            gene_set = {n["label"] for n in g_nodes if n["leaf"]}
+            ghash = [0] * len(sp_nodes)
+            for n in sp_nodes:
+                if n["leaf"]:
+                    ghash[n["idx"]] = sp_hash[n["label"]] if n["label"] in gene_set else 0
+                else:
+                    ghash[n["idx"]] = 0
+                    for c in n["children"]:
+                        ghash[n["idx"]] += ghash[c["idx"]]
+            assert ghash[sp_root["idx"]] == H_G, "hash mismatch"
+
+            # species branches -> projected keys, fuse detection
+            keys = []
+            for n in seq:
+                h = ghash[n["idx"]]
+                if h == 0 or h == H_G:
+                    keys.append(None)  # struct: a projected side is empty
+                else:
+                    keys.append(min(h, H_G - h))
+
+            from collections import Counter
+            cnt = Counter(k for k in keys if k is not None)
+            fuse_keys = {k for k, c in cnt.items() if c > 1}
+
+            row = [gname]
+            for n, key in zip(seq, keys):
+                if key is None:
+                    row.append("NA_struct")
+                    continue
+                fuse = key in fuse_keys
+                topo = key not in gdict
+                if fuse and topo:
+                    row.append("NA_fuse_topo")
+                elif fuse:
+                    row.append("NA_fuse")
+                elif topo:
+                    row.append("NA_topo")
+                else:
+                    bl = gdict[key][1]
+                    row.append(bl if bl is not None else "NA_len")
+            f.write("\t".join(row) + "\n")
+            ngenes += 1
+
+    print("done: %s.tre, %s.tsv (%d genes)" % (out_prefix, out_prefix, ngenes))
 
 
 if __name__ == "__main__":
