@@ -1,5 +1,5 @@
 """
-# SplitAligner — README (embedded in source)
+# FastSplitAligner — README (embedded in source)
 
 ## License
 
